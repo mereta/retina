@@ -31,16 +31,18 @@ const (
 )
 
 var (
-	errTcpdumpCommandNotConstructed = errors.New("tcpdump command is not constructed with expected arguments")
-	errTcpdumpStopFailed            = errors.New("tcpdump stop failed")
-	errIptablesUnavilable           = errors.New("no iptables command is available")
-	errIptablesLegacySaveFailed     = errors.New("failed to run iptables-legacy-save")
-	errIptablesNftSaveFailed        = errors.New("failed to run iptables-nft-save")
+	errTcpdumpCommandNotConstructed   = errors.New("tcpdump command is not constructed with expected arguments")
+	errTcpdumpStopFailed              = errors.New("tcpdump stop failed")
+	errIptablesUnavilable             = errors.New("no iptables command is available")
+	errIptablesLegacySaveFailed       = errors.New("failed to run iptables-legacy-save")
+	errIptablesNftSaveFailed          = errors.New("failed to run iptables-nft-save")
+	errTcpdumpFilterFlagInjection     = errors.New("tcpdump filter cannot start with '-' (potential flag injection)")
+	errTcpdumpFilterEmptyOrWhitespace = errors.New("tcpdump filter cannot be empty or whitespace-only")
 )
 
 // constructTcpdumpCommand creates a tcpdump command with the appropriate arguments
-// based on environment variables for raw filter, specific interfaces, or default behavior
-func constructTcpdumpCommand(captureFilePath string) *exec.Cmd {
+// bpfFilter is the combined BPF filter expression (user filter + system filter if both present)
+func constructTcpdumpCommand(captureFilePath, bpfFilter string) *exec.Cmd {
 	// NOTE(mainred): The tcpdump release of debian:bullseye image, which is for preparing clang and tools, runs as
 	// tcpdump user by default for savefiles for output, but when the binary and library are copied to the distroless
 	// base image, we lost tcpdump user, and the following error will be raised when running tcpdump in our capture pod.
@@ -60,12 +62,8 @@ func constructTcpdumpCommand(captureFilePath string) *exec.Cmd {
 		)
 	}
 
-	// If we set flag and value into the arg item of args, the space between flag and value will not treated as part of
-	// value, for example, "-i eth0" will be treated as "-i" and " eth0", thus brings a tcpdump unknown interface error.
-	if tcpdumpRawFilter := os.Getenv(captureConstants.TcpdumpRawFilterEnvKey); tcpdumpRawFilter != "" {
-		tcpdumpRawFilterSlice := strings.Split(tcpdumpRawFilter, " ")
-		captureStartCmd.Args = append(captureStartCmd.Args, tcpdumpRawFilterSlice...)
-	} else if specificInterfaces := os.Getenv(captureConstants.CaptureInterfacesEnvKey); specificInterfaces != "" {
+	// Handle interface selection
+	if specificInterfaces := os.Getenv(captureConstants.CaptureInterfacesEnvKey); specificInterfaces != "" {
 		// Use specific interfaces if provided
 		interfaceList := strings.Split(specificInterfaces, ",")
 		for _, iface := range interfaceList {
@@ -75,8 +73,15 @@ func constructTcpdumpCommand(captureFilePath string) *exec.Cmd {
 			}
 		}
 	} else {
-		// Default to capturing on all interfaces if no raw tcpdump filter or specific interfaces are specified
+		// Default to capturing on all interfaces
 		captureStartCmd.Args = append(captureStartCmd.Args, "-i", "any")
+	}
+
+	// SECURITY: bpfFilter is the combined BPF (Berkeley Packet Filter) expression passed as a single argument
+	// to tcpdump. This prevents command injection via flags like -z, -w, or -G.
+	// The filter is validated before being passed here.
+	if bpfFilter != "" {
+		captureStartCmd.Args = append(captureStartCmd.Args, bpfFilter)
 	}
 
 	return captureStartCmd
@@ -122,20 +127,38 @@ func (ncp *NetworkCaptureProvider) CaptureNetworkPacket(ctx context.Context, fil
 	// Remove the folder in case it already exists to mislead the file size check.
 	os.Remove(captureFilePath) //nolint:errcheck // File may not exist, ok to ignore error
 
-	// NOTE(mainred): The tcpdump release of debian:bullseye image, which is for preparing clang and tools, runs as
-	// tcpdump user by default for savefiles for output, but when the binary and library are copied to the distroless
-	// base image, we lost tcpdump user, and the following error will be raised when running tcpdump in our capture pod.
-	// tcpdump: Couldn't find user 'tcpdump'
-	// To disable this behavior, we use `--relinquish-privileges=root` same as `-Z root`.
-	// ref: https://manpages.debian.org/bullseye/tcpdump/tcpdump.8.en.html#Z
-	captureStartCmd := constructTcpdumpCommand(captureFilePath)
+	// Combine user BPF filter (from TCPDUMP_RAW_FILTER env) with system-generated filter (include/exclude Pod IPs)
+	var combinedFilter string
 
-	if filter != "" {
-		captureStartCmd.Args = append(
-			captureStartCmd.Args,
-			filter,
-		)
+	// Get user-provided BPF filter from environment variable
+	tcpdumpRawFilter := os.Getenv(captureConstants.TcpdumpRawFilterEnvKey)
+	trimmedUserFilter := strings.TrimSpace(tcpdumpRawFilter)
+
+	// SECURITY: Validate user filter (defense in depth - CRD validation is primary defense)
+	if trimmedUserFilter != "" && strings.HasPrefix(trimmedUserFilter, "-") {
+		return fmt.Errorf("%w: %s", errTcpdumpFilterFlagInjection, trimmedUserFilter)
 	}
+
+	if trimmedUserFilter == "" && tcpdumpRawFilter != "" {
+		return errTcpdumpFilterEmptyOrWhitespace
+	}
+
+	// Combine filters using BPF 'and' operator if both are present
+	switch {
+	case trimmedUserFilter != "" && filter != "":
+		// User filter + system filter: "tcp port 80 and (host 10.0.0.1)"
+		combinedFilter = fmt.Sprintf("%s and %s", trimmedUserFilter, filter)
+	case trimmedUserFilter != "":
+		// Only user filter
+		combinedFilter = trimmedUserFilter
+	case filter != "":
+		// Only system filter (include/exclude Pod IPs)
+		combinedFilter = filter
+		// else: no filters at all, capture everything
+	}
+
+	// Construct tcpdump command with combined filter
+	captureStartCmd := constructTcpdumpCommand(captureFilePath, combinedFilter)
 
 	ncp.l.Info("Running tcpdump with args", zap.String("tcpdump command", captureStartCmd.String()), zap.Any("tcpdump args", captureStartCmd.Args))
 

@@ -8,6 +8,7 @@ package provider
 import (
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,7 +22,6 @@ const (
 	interfaceEth0       = "eth0"
 	interfaceEth1       = "eth1"
 	interfaceAny        = "any"
-	interfaceLo         = "lo"
 )
 
 func TestSetupAndCleanup(t *testing.T) {
@@ -80,28 +80,44 @@ func resetEnvVars() {
 	os.Unsetenv(captureConstants.CaptureInterfacesEnvKey)
 }
 
-func TestTcpdumpDefaultBehavior(t *testing.T) {
+// TestTcpdumpEmptyFilter verifies that empty filter falls back to default interface
+// and that no unexpected or malicious arguments are injected.
+func TestTcpdumpEmptyFilter(t *testing.T) {
 	resetEnvVars()
+	cmd := constructTcpdumpCommand(testCaptureFilePath, "")
 
-	cmd := constructTcpdumpCommand(testCaptureFilePath)
-
+	// Should fall back to "-i any"
 	if !hasInterface(cmd, interfaceAny) {
-		t.Errorf("Expected tcpdump command to include '-i any', but got args: %v", cmd.Args)
+		t.Errorf("Expected fallback to '-i any' with empty filter, but got args: %v", cmd.Args)
+	}
+
+	// Verify only expected args are present and no malicious content
+	for _, arg := range cmd.Args {
+		if arg != "tcpdump" && arg != "-w" && arg != testCaptureFilePath &&
+			arg != "--relinquish-privileges=root" && arg != "-i" && arg != interfaceAny {
+			t.Errorf("Unexpected argument '%s' found in empty filter command: %v", arg, cmd.Args)
+		}
+		// Check for malicious content
+		if strings.Contains(arg, "/etc/passwd") || strings.Contains(arg, "evil") ||
+			strings.Contains(arg, "rm -rf") || strings.HasPrefix(arg, "-z") {
+			t.Errorf("Malicious content should not be present in command args: %v", cmd.Args)
+		}
 	}
 }
 
-func TestTcpdumpRawFilterOverride(t *testing.T) {
+func TestTcpdumpWithBPFFilter(t *testing.T) {
 	resetEnvVars()
-	os.Setenv(captureConstants.TcpdumpRawFilterEnvKey, "-i "+interfaceEth0)
-	defer os.Unsetenv(captureConstants.TcpdumpRawFilterEnvKey)
+	// Test that a valid BPF filter is properly added to the tcpdump command
+	// Note: Filter validation (e.g., rejecting '-' prefix) happens in CaptureNetworkPacket
 
-	cmd := constructTcpdumpCommand(testCaptureFilePath)
+	bpfFilter := "tcp port 80"
 
-	if !hasInterface(cmd, interfaceEth0) {
-		t.Errorf("Expected tcpdump command to include '-i %s' from raw filter, but got args: %v", interfaceEth0, cmd.Args)
-	}
-	if hasInterface(cmd, interfaceAny) {
-		t.Errorf("Expected tcpdump command not to include '-i any' when raw filter is set, but got args: %v", cmd.Args)
+	cmd := constructTcpdumpCommand(testCaptureFilePath, bpfFilter)
+
+	// Should have the BPF filter as an argument
+	found := slices.Contains(cmd.Args, bpfFilter)
+	if !found {
+		t.Errorf("Expected BPF filter '%s' in args, but got: %v", bpfFilter, cmd.Args)
 	}
 }
 
@@ -110,7 +126,7 @@ func TestTcpdumpSpecificInterfaces(t *testing.T) {
 	os.Setenv(captureConstants.CaptureInterfacesEnvKey, interfaceEth0+","+interfaceEth1)
 	defer os.Unsetenv(captureConstants.CaptureInterfacesEnvKey)
 
-	cmd := constructTcpdumpCommand(testCaptureFilePath)
+	cmd := constructTcpdumpCommand(testCaptureFilePath, "")
 
 	if !hasInterface(cmd, interfaceEth0) {
 		t.Errorf("Expected tcpdump command to include '-i %s', but got args: %v", interfaceEth0, cmd.Args)
@@ -123,42 +139,143 @@ func TestTcpdumpSpecificInterfaces(t *testing.T) {
 	}
 }
 
-func TestTcpdumpRawFilterPriority(t *testing.T) {
+func TestTcpdumpBPFFilterWithSpecificInterfaces(t *testing.T) {
 	resetEnvVars()
-	os.Setenv(captureConstants.TcpdumpRawFilterEnvKey, "-i "+interfaceLo)
+	// Verify that BPF filter and specific interface selection work together
+	// Both should be present in the command (they are independent features)
+	bpfFilter := "tcp port 443"
 	os.Setenv(captureConstants.CaptureInterfacesEnvKey, interfaceEth0+","+interfaceEth1)
-	defer os.Unsetenv(captureConstants.TcpdumpRawFilterEnvKey)
 	defer os.Unsetenv(captureConstants.CaptureInterfacesEnvKey)
 
-	cmd := constructTcpdumpCommand(testCaptureFilePath)
+	cmd := constructTcpdumpCommand(testCaptureFilePath, bpfFilter)
 
-	if !hasInterface(cmd, interfaceLo) {
-		t.Errorf("Expected tcpdump command to include '-i %s' from raw filter, but got args: %v", interfaceLo, cmd.Args)
+	// The BPF filter should be present
+	found := slices.Contains(cmd.Args, bpfFilter)
+	if !found {
+		t.Errorf("Expected BPF filter '%s' in command, but got args: %v", bpfFilter, cmd.Args)
 	}
-	if hasInterface(cmd, interfaceEth0) || hasInterface(cmd, interfaceEth1) {
-		t.Errorf("Expected tcpdump command not to include specific interfaces when raw filter is set, but got args: %v", cmd.Args)
-	}
-}
 
-func TestTcpdumpInterfaceOverrideDefault(t *testing.T) {
-	resetEnvVars()
-	os.Setenv(captureConstants.CaptureInterfacesEnvKey, interfaceEth0)
-	defer os.Unsetenv(captureConstants.CaptureInterfacesEnvKey)
-
-	cmd := constructTcpdumpCommand(testCaptureFilePath)
-
-	if !hasInterface(cmd, interfaceEth0) {
-		t.Errorf("Expected tcpdump command to include '-i %s' from specific interfaces, but got args: %v", interfaceEth0, cmd.Args)
-	}
-	if hasInterface(cmd, interfaceAny) {
-		t.Errorf("Expected tcpdump command not to include '-i any' when specific interfaces are set, but got args: %v", cmd.Args)
+	// Interfaces should still be present (BPF filter doesn't override interface selection)
+	if !hasInterface(cmd, interfaceEth0) || !hasInterface(cmd, interfaceEth1) {
+		t.Errorf("Expected both interfaces to be present with BPF filter, but got args: %v", cmd.Args)
 	}
 }
 
 func TestTcpdumpCommandConstruction(t *testing.T) {
-	t.Run("DefaultBehaviorIncludesAnyInterface", TestTcpdumpDefaultBehavior)
-	t.Run("RawFilterOverridesDefault", TestTcpdumpRawFilterOverride)
+	// Default behavior tests
+	t.Run("EmptyFilter", TestTcpdumpEmptyFilter)
+
+	// Interface selection tests
 	t.Run("SpecificInterfaceSelection", TestTcpdumpSpecificInterfaces)
-	t.Run("RawFilterOverridesSpecificInterfaces", TestTcpdumpRawFilterPriority)
-	t.Run("SpecificInterfacesOverrideDefault", TestTcpdumpInterfaceOverrideDefault)
+	t.Run("InterfaceListWithEmptyEntries", TestTcpdumpInterfaceListWithEmptyEntries)
+
+	// BPF filter tests
+	t.Run("WithBPFFilter", TestTcpdumpWithBPFFilter)
+	t.Run("BPFFilterWithSpecificInterfaces", TestTcpdumpBPFFilterWithSpecificInterfaces)
+	t.Run("BPFFilterWithComplexExpression", TestTcpdumpBPFFilterComplexExpression)
+	t.Run("BPFFilterWithTcpFlags", TestTcpdumpBPFFilterWithTcpFlags)
+
+	// Option tests
+	t.Run("PacketSizeOption", TestTcpdumpPacketSizeOption)
+}
+
+// TestTcpdumpBPFFilterComplexExpression validates that complex BPF filter expressions
+// with multiple keywords and operators are passed as a single argument, not split on spaces.
+// This is critical for security - splitting would allow flag injection attacks.
+func TestTcpdumpBPFFilterComplexExpression(t *testing.T) {
+	resetEnvVars()
+	// Test a complex BPF filter that should remain as one argument
+	bpfFilter := "tcp and (port 80 or port 443) and host 10.0.0.1"
+
+	cmd := constructTcpdumpCommand(testCaptureFilePath, bpfFilter)
+
+	// The entire filter must appear as a single argument
+	found := slices.Contains(cmd.Args, bpfFilter)
+	if !found {
+		t.Errorf("Expected entire BPF filter '%s' as single argument, but got args: %v", bpfFilter, cmd.Args)
+	}
+
+	// Verify individual keywords are NOT separate arguments (which would indicate splitting)
+	splitIndicators := []string{"tcp", "and", "port", "80", "or", "443", "host", "10.0.0.1"}
+	for _, indicator := range splitIndicators {
+		for _, arg := range cmd.Args {
+			if arg == indicator {
+				t.Errorf("BPF filter was incorrectly split: found '%s' as separate arg in: %v", indicator, cmd.Args)
+			}
+		}
+	}
+}
+
+// TestTcpdumpBPFFilterWithTcpFlags verifies that BPF filters using TCP flag syntax
+// with special characters like brackets, pipes, and ampersands are passed correctly.
+// Example: tcp[tcpflags] & (tcp-syn|tcp-ack) == tcp-syn
+func TestTcpdumpBPFFilterWithTcpFlags(t *testing.T) {
+	resetEnvVars()
+	// Test a BPF filter with TCP flags syntax and special characters
+	bpfFilter := "tcp[tcpflags] & (tcp-syn|tcp-ack) == tcp-syn"
+
+	cmd := constructTcpdumpCommand(testCaptureFilePath, bpfFilter)
+
+	// Positive check: The entire filter must appear as a single argument
+	found := slices.Contains(cmd.Args, bpfFilter)
+	if !found {
+		t.Errorf("Expected entire BPF filter '%s' as single argument, but got args: %v", bpfFilter, cmd.Args)
+	}
+
+	// Negative check: Verify the filter is not split on spaces (which would indicate incorrect handling)
+	// These are the pieces that would appear if the filter were split on spaces
+	splitIndicators := []string{"tcp[tcpflags]", "&", "(tcp-syn|tcp-ack)", "==", "tcp-syn"}
+	for _, indicator := range splitIndicators {
+		for _, arg := range cmd.Args {
+			if arg == indicator {
+				t.Errorf("BPF filter was incorrectly split: found '%s' as separate arg in: %v", indicator, cmd.Args)
+			}
+		}
+	}
+}
+
+// TestTcpdumpInterfaceListWithEmptyEntries verifies handling of interface lists with empty values
+func TestTcpdumpInterfaceListWithEmptyEntries(t *testing.T) {
+	resetEnvVars()
+	// Interface list with empty entries and extra spaces
+	os.Setenv(captureConstants.CaptureInterfacesEnvKey, "eth0, ,eth1,,eth2, ")
+	defer os.Unsetenv(captureConstants.CaptureInterfacesEnvKey)
+
+	cmd := constructTcpdumpCommand(testCaptureFilePath, "")
+
+	// Should only include non-empty interfaces
+	if !hasInterface(cmd, interfaceEth0) {
+		t.Errorf("Expected '-i eth0', but got args: %v", cmd.Args)
+	}
+	if !hasInterface(cmd, interfaceEth1) {
+		t.Errorf("Expected '-i eth1', but got args: %v", cmd.Args)
+	}
+	// eth2 should be present
+	if !hasInterface(cmd, "eth2") {
+		t.Errorf("Expected '-i eth2', but got args: %v", cmd.Args)
+	}
+}
+
+// TestTcpdumpPacketSizeOption verifies that packet size option is correctly added
+func TestTcpdumpPacketSizeOption(t *testing.T) {
+	resetEnvVars()
+	os.Setenv(captureConstants.PacketSizeEnvKey, "1500")
+	defer os.Unsetenv(captureConstants.PacketSizeEnvKey)
+
+	cmd := constructTcpdumpCommand(testCaptureFilePath, "")
+
+	// Should include -s 1500
+	foundS := false
+	foundSize := false
+	for i, arg := range cmd.Args {
+		if arg == "-s" {
+			foundS = true
+			if i+1 < len(cmd.Args) && cmd.Args[i+1] == "1500" {
+				foundSize = true
+			}
+		}
+	}
+	if !foundS || !foundSize {
+		t.Errorf("Expected '-s 1500' in tcpdump args, but got: %v", cmd.Args)
+	}
 }

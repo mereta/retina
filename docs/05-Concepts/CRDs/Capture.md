@@ -23,11 +23,15 @@ The `Capture` CRD is defined with the following specifications:
 ### Fields
 
 - **spec.captureConfiguration:** Specifies the configuration for capturing network packets. It includes the following properties:
-  - `captureOption`: Lists options for the capture, such as duration, maximum capture size, and packet size.
+  - `captureOption`: Lists options for the capture, such as:
+    - `duration`: Capture duration
+    - `maxCaptureSize`: Maximum capture file size in MB
+    - `packetSize`: Maximum packet size to capture
+    - `interfaces`: Array of network interface names to capture from (e.g., `["eth0", "eth1"]`). If empty, captures from all interfaces.
   - `captureTarget`: Defines the target on which the network packets will be captured. It includes namespace, node, and pod selectors, as well as specific pod names.
   - `filters`: Specifies filters for including or excluding network packets based on IP or port.
   - `includeMetadata`: Indicates whether networking metadata should be captured.
-  - `tcpdumpFilter`: Allows specifying a raw tcpdump filter string.
+  - `tcpdumpFilter`: Allows specifying a BPF (Berkeley Packet Filter) filter expression for advanced packet filtering. This field accepts ONLY valid BPF syntax (e.g., `"host 10.0.0.1"`, `"tcp port 443"`, `"net 192.168.0.0/16 and not port 22"`). Do NOT use tcpdump command-line flags in this field. To select specific network interfaces, use the `captureOption.interfaces` field instead.
 
 - **spec.outputConfiguration:** Indicates where the captured data will be stored. It includes the following properties:
   - `blobUpload`: Specifies a secret containing the blob SAS URL for storing the capture data.
@@ -75,6 +79,61 @@ data:
   s3-access-key-id: <based-encode-s3-access-key-id>
   s3-secret-access-key: <based-encode-s3-secret-access-key>
 ```
+
+### Advanced Filtering
+
+#### Capturing on Specific Network Interfaces
+
+To capture packets only on specific network interfaces, use the `captureOption.interfaces` field:
+
+```yaml
+apiVersion: retina.sh/v1alpha1
+kind: Capture
+metadata:
+  name: capture-specific-interfaces
+spec:
+  captureConfiguration:
+    captureOption:
+      duration: "1m"
+      interfaces: ["eth0", "eth1"]  # Capture only on these interfaces
+    captureTarget:
+      nodeSelector:
+        matchLabels:
+          kubernetes.io/hostname: node-1
+  outputConfiguration:
+    hostPath: /tmp/captures
+```
+
+#### Using BPF Filters
+
+To apply advanced packet filtering using BPF (Berkeley Packet Filter) syntax, use the `tcpdumpFilter` field:
+
+```yaml
+apiVersion: retina.sh/v1alpha1
+kind: Capture
+metadata:
+  name: capture-with-bpf-filter
+spec:
+  captureConfiguration:
+    captureOption:
+      duration: "1m"
+    tcpdumpFilter: "tcp and (port 443 or port 80)"  # Only capture HTTP/HTTPS traffic
+    captureTarget:
+      nodeSelector:
+        matchLabels:
+          kubernetes.io/hostname: node-1
+  outputConfiguration:
+    hostPath: /tmp/captures
+```
+
+**Valid BPF filter examples:**
+
+- `"host 10.0.0.1"` - Capture packets to/from specific host
+- `"tcp port 443"` - Capture HTTPS traffic
+- `"net 192.168.0.0/16 and not port 22"` - Capture subnet traffic except SSH
+- `"tcp and (port 80 or port 443)"` - Capture HTTP and HTTPS traffic
+
+**Important:** The `tcpdumpFilter` field accepts ONLY BPF filter expressions, not tcpdump command-line flags. Do not use flags like `-i`, `-w`, or `-z` in this field.
 
 ### Capture Lifecycle
 

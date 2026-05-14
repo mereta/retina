@@ -215,7 +215,8 @@ func NewCreateSubCommand(kubeClient kubernetes.Interface) *cobra.Command {
 	createCapture.Flags().StringVar(&opts.s3Path, "s3-path", DefaultS3Path, "Prefix path within the S3 bucket where captures will be stored")
 	createCapture.Flags().StringVar(&opts.s3AccessKeyID, "s3-access-key-id", "", "S3 access key id to upload capture files")
 	createCapture.Flags().StringVar(&opts.s3SecretAccessKey, "s3-secret-access-key", "", "S3 access secret key to upload capture files")
-	createCapture.Flags().StringVar(&opts.tcpdumpFilter, "tcpdump-filter", "", "Raw tcpdump flags which works only for Linux")
+	createCapture.Flags().StringVar(&opts.tcpdumpFilter, "tcpdump-filter", "",
+		"BPF filter expression for packet filtering (e.g., 'host 10.0.0.1', 'tcp port 443'). Use --interfaces for interface selection")
 	createCapture.Flags().StringVar(&opts.interfaces, "interfaces", "", "Comma-separated list of network interfaces to capture on (e.g., eth0,eth1)")
 	createCapture.Flags().StringVar(&opts.excludeFilter, "exclude-filter", "", "A comma-separated list of IP:Port pairs that are "+
 		"excluded from capturing network packets. Supported formats are IP:Port, IP, Port, *:Port, IP:*")

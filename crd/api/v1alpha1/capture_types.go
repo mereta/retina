@@ -67,8 +67,9 @@ type CaptureOption struct {
 	MaxCaptureSize *int `json:"maxCaptureSize,omitempty"`
 
 	// Interfaces specifies the network interfaces on which to capture packets.
-	// If specified, captures only on the listed interfaces.
+	// If specified, captures only on the listed interfaces (e.g., ["eth0", "eth1"]).
 	// If empty, captures on all interfaces by default.
+	// Use this field to select specific interfaces, NOT the tcpdumpFilter field.
 	// +optional
 	Interfaces []string `json:"interfaces,omitempty"`
 }
@@ -106,8 +107,17 @@ type CaptureConfiguration struct {
 	// +optional
 	Filters *CaptureConfigurationFilters `json:"filters,omitempty"`
 
-	// TcpdumpFilter is a raw tcpdump filter string.
+	// TcpdumpFilter is a BPF filter expression string.
+	// This field accepts ONLY valid BPF syntax for packet filtering, such as:
+	//   - "host 10.0.0.1"
+	//   - "tcp port 443"
+	//   - "net 192.168.0.0/16 and not port 22"
+	// This field does NOT accept tcpdump command-line flags (e.g., "-i", "-w", "-z").
+	// To specify network interfaces, use the captureOption.interfaces field instead.
+	// Must not start with a hyphen to prevent flag injection.
 	// +optional
+	// +kubebuilder:validation:Pattern="^[^-].*$"
+	// +kubebuilder:validation:MaxLength=1024
 	TcpdumpFilter *string `json:"tcpdumpFilter,omitempty"`
 
 	// IncludeMetadata represents whether or not networking metadata should be captured.

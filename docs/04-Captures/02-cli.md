@@ -84,8 +84,8 @@ The network traffic will be uploaded to the specified output location.
 | `s3-path`             | string     | retina/captures | Prefix path within the S3 bucket where captures will be stored.              |       |
 | `s3-region`           | string     | ""       | Region where the S3 compatible bucket is located.                            |       |
 | `s3-secret-access-key`| string     | ""       | S3 access secret key to upload capture files.                                |       |
-| `interfaces`          | string     | ""       | Comma-separated list of network interfaces to capture on (e.g., "eth0,eth1"). By default, captures are performed on all network interfaces. |       |
-| `tcpdump-filter`      | string     | ""       | Raw tcpdump flags. Available tcpdump filters can be found in the [TCPDUMP MAN PAGE](https://www.tcpdump.org/manpages/tcpdump.1.html). This overrides interface selection options when specified. | Only works on Linux. Includes only tcpdump flags, for boolean expressions, please use include/exclude filters.     |
+| `interfaces`          | string     | ""       | Comma-separated list of network interfaces to capture on (e.g., "eth0,eth1"). By default, captures are performed on all network interfaces. Can be combined with `tcpdump-filter`. |       |
+| `tcpdump-filter`      | string     | ""       | BPF expression for packet filtering (e.g., "host 10.0.0.1", "tcp port 443", "net 192.168.0.0/16 and not port 22"). See the [PCAP-FILTER MAN PAGE](https://www.tcpdump.org/manpages/pcap-filter.7.html) for BPF syntax. Can be combined with `--interfaces` flag. Do NOT use tcpdump command-line flags (like "-i") in this field. | Use --interfaces flag for interface selection. |
 
 #### Examples
 

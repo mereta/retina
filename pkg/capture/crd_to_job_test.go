@@ -854,7 +854,7 @@ func Test_CaptureToPodTranslator_TranslateCaptureToJobs(t *testing.T) {
 	pvc := "capture-pvc"
 	backoffLimit := int32(0)
 	rootUser := int64(0)
-	tcpdumpFilter := "-i eth0"
+	tcpdumpFilter := "tcp port 443"
 	captureFolderHostPathType := corev1.HostPathDirectoryOrCreate
 	commonJob := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1411,7 +1411,7 @@ func Test_CaptureToPodTranslator_TranslateCaptureToJobs(t *testing.T) {
 				{Name: captureConstants.CaptureStartTimestampEnvKey, Value: file.TimeToString(timestamp)},
 				{Name: captureConstants.IncludeMetadataEnvKey, Value: "false"},
 				{Name: captureConstants.NodeHostNameEnvKey, Value: "node1"},
-				{Name: captureConstants.TcpdumpRawFilterEnvKey, Value: "-i eth0"},
+				{Name: captureConstants.TcpdumpRawFilterEnvKey, Value: "tcp port 443"},
 				{Name: captureConstants.TcpdumpFilterEnvKey, Value: "(host 10.225.0.4)"},
 				{
 					Name: telemetry.EnvPodName,
@@ -1736,7 +1736,7 @@ func Test_CaptureToPodTranslator_TranslateCaptureToJobs(t *testing.T) {
 				{Name: captureConstants.CaptureStartTimestampEnvKey, Value: file.TimeToString(timestamp)},
 				{Name: captureConstants.IncludeMetadataEnvKey, Value: "false"},
 				{Name: captureConstants.NodeHostNameEnvKey, Value: "node1"},
-				{Name: captureConstants.TcpdumpRawFilterEnvKey, Value: "-i eth0"},
+				{Name: captureConstants.TcpdumpRawFilterEnvKey, Value: "tcp port 443"},
 				{Name: captureConstants.NetshFilterEnvKey, Value: "IPv4.Address=(10.225.0.4)"},
 				{
 					Name: telemetry.EnvPodName,
